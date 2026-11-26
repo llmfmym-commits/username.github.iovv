@@ -1,0 +1,63 @@
+name: Build APK
+on:
+  push:
+    paths: ['**.zip']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find newest zip
+        id: z
+        run: |
+          best=""; bt=0
+          while IFS= read -r -d '' f; do
+            t=$(git log -1 --format=%ct -- "$f"); t=${t:-0}
+            if [ "$t" -ge "$bt" ]; then bt=$t; best=$f; fi
+          done < <(find . -name '*.zip' -not -path './.git/*' -print0)
+          [ -n "$best" ] || { echo "no zip found"; exit 1; }
+          echo "zip=$best" >> "$GITHUB_OUTPUT"
+
+      - name: Unzip
+        env:
+          ZIP: ${{ steps.z.outputs.zip }}
+        run: |
+          rm -rf src && mkdir src
+          unzip -q "$ZIP" -d src
+          s=$(find src -maxdepth 3 \( -name settings.gradle.kts -o -name settings.gradle \) | head -n1)
+          [ -n "$s" ] || { echo "settings.gradle not found"; exit 1; }
+          echo "ROOT=$(dirname "$s")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build
+        working-directory: ${{ env.ROOT }}
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WALFAJR-apk
+          path: ${{ env.ROOT }}/app/build/outputs/apk/debug/*.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: WALFAJR build ${{ github.run_number }}
+          files: ${{ env.ROOT }}/app/build/outputs/apk/debug/*.apk
